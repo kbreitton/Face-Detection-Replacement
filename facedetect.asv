@@ -1,0 +1,52 @@
+%initialize
+im = to_classify{1};
+
+green = uint8([0 255 0]);
+shapeInserter = vision.ShapeInserter('Shape','Rectangles','BorderColor','Custom','CustomBorderColor',green);
+max_scales = floor(log2(min(size(rgb2gray(im))) / 36)) + 1; %solution to how many times you can scale down the image by .5 each time
+for k = 1:max_scales + 1 %last iteration is when you scale image down so the minimum dimension is 36
+    if k <= max_scales
+    im_scaled = imresize(im, 1/(2^(k-1)));
+    else
+        im_scaled = imresize(im, 36/min(size(rgb2gray(im))));
+    end
+%     im_scaled = imresize(im, [36 36]);
+    sz = size(im_scaled);
+    
+    %zero pad image
+    im_pad = padarray(im_scaled, [35 35]);
+    
+    %do edge detection first and look for a face only around where edges occur
+    bw = cannyEdge(im_scaled, .4 * log(max_scales+1)/log(k+1), .4 * log(max_scales+1)/log(k+1)); %change the thresholds of edge detection to be lower the larger the scale (smaller the image), where the minimum threshold is .4
+    [row, col] = find(bw == 1); %i,j indices of each edge pixel
+    
+    window = cell(length(row));
+    for n = 1:length(row) %numel(bw) %for total # pixels that are edges
+        %get window centered at edge pixel
+        window{n} = rgb2gray(im_pad(row(n)+35-17:row(n)+35+18, col(n)+35-17:col(n)+35+18,:));
+    end
+    
+    %apply HOG at all windows around edge pixels
+    windowHOG = cellfun(@HOG, window, 'UniformOutput', 0);
+%    windowHOG(n,:) = HOGmat(rgb2gray(im_pad(row(n)+35-17:row(n)+35+18, col(n)+35-17:col(n)+35+18,:)));
+
+    %face prediction probabilities for each window HOG
+    prob_face = svmpredict_prob(svm_model_ours, windowHOG);
+%     prob_face = svmpredict_prob(svm_model_matlabs, windowHOG);
+    
+    J = [];
+    face_centers = find(prob_face > .5); % elements of prob_face where greater than .9 prob is a "face"
+%     [max_prob, face_centers] = max(prob_face(face_centers));
+    if isempty(face_centers) == 0
+        [i, j] = ind2sub(sz, face_centers); %i, j centers of each face detected (of the padded image)
+        
+        %display green boxes around detected faces (of the normal,
+        %non-padded image)
+        rects=[j,i,ones(size(i)) * 35, ones(size(j)) * 35];
+        J = step(shapeInserter, im_scaled, int32(rects));
+        figure(k+1)
+        imshow(J)
+    end
+    
+    detectedFaceWindowHOGs = windowHOG(prob_face > .5,:);
+end
